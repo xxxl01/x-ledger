@@ -3,6 +3,7 @@ import { useRouter } from "expo-router";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -12,34 +13,38 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   Check,
   ChevronLeft,
-  ChevronDown,
-  ChevronUp,
   Circle,
   ImagePlus,
   LoaderCircle,
   Square,
   SquareCheckBig,
+  X,
 } from "lucide-react-native";
-import { useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { ThemedText } from "@/components/themed-text";
 import {
-  parseTransactionsFromOcrTextWithDebug,
-  recognizePaymentScreenshot,
+  compressImagesForLlm,
+  parseTransactionsFromImagesWithDebug,
   saveImportCandidates,
   type ImportCandidate,
-  type LlmDebugRequest,
 } from "@/service";
 
-type StepKey = "pick" | "ocr" | "llm" | "review" | "saving";
+type StepKey = "pick" | "ready" | "compress" | "llm" | "review" | "saving";
 type StepStatus = "pending" | "active" | "done";
 
 const STEPS: { key: StepKey; label: string }[] = [
   { key: "pick", label: "选择截图" },
-  { key: "ocr", label: "识别文字" },
+  { key: "compress", label: "压缩图片" },
   { key: "llm", label: "整理记录" },
   { key: "review", label: "筛选结果" },
 ];
+
+type SelectedImage = {
+  uri: string;
+  width?: number;
+  height?: number;
+};
 
 function formatDay(iso: string) {
   const date = new Date(iso);
@@ -59,6 +64,10 @@ function formatMoney(transaction: ImportCandidate) {
 }
 
 function getStepStatus(currentStep: StepKey, step: StepKey): StepStatus {
+  if (currentStep === "ready") {
+    return step === "pick" ? "done" : "pending";
+  }
+
   const currentIndex = STEPS.findIndex((item) => item.key === currentStep);
   const stepIndex = STEPS.findIndex((item) => item.key === step);
 
@@ -75,13 +84,9 @@ export default function UploadScreen() {
   const router = useRouter();
   const [currentStep, setCurrentStep] = useState<StepKey>("pick");
   const [isWorking, setIsWorking] = useState(false);
+  const [selectedImages, setSelectedImages] = useState<SelectedImage[]>([]);
   const [candidates, setCandidates] = useState<ImportCandidate[]>([]);
   const [selectedIndexes, setSelectedIndexes] = useState<Set<number>>(new Set());
-  const [ocrText, setOcrText] = useState("");
-  const [rawOcrText, setRawOcrText] = useState("");
-  const [llmRequest, setLlmRequest] = useState<LlmDebugRequest | null>(null);
-  const [llmResponse, setLlmResponse] = useState("");
-  const [debugVisible, setDebugVisible] = useState(false);
 
   const groupedCandidates = useMemo(() => {
     const groups = new Map<string, { index: number; candidate: ImportCandidate }[]>();
@@ -98,6 +103,11 @@ export default function UploadScreen() {
 
   const selectedCount = selectedIndexes.size;
 
+  const resetRecognitionResult = useCallback(() => {
+    setCandidates([]);
+    setSelectedIndexes(new Set());
+  }, []);
+
   async function handleSelectImage() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
@@ -106,36 +116,56 @@ export default function UploadScreen() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      allowsMultipleSelection: false,
+      allowsMultipleSelection: true,
       mediaTypes: ["images"],
       quality: 1,
     });
 
-    if (result.canceled || !result.assets[0]?.uri) {
+    if (result.canceled || result.assets.length === 0) {
       return;
     }
 
-    setCandidates([]);
-    setSelectedIndexes(new Set());
-    setOcrText("");
-    setRawOcrText("");
-    setLlmRequest(null);
-    setLlmResponse("");
-    setDebugVisible(false);
+    resetRecognitionResult();
+    setSelectedImages(
+      result.assets
+        .filter((asset) => Boolean(asset.uri))
+        .map((asset) => ({
+          uri: asset.uri,
+          width: asset.width,
+          height: asset.height,
+        })),
+    );
+    setCurrentStep("ready");
+  }
+
+  const removeSelectedImage = useCallback((uri: string) => {
+    setSelectedImages((current) => {
+      const next = current.filter((image) => image.uri !== uri);
+      if (next.length === 0) {
+        setCurrentStep("pick");
+      } else {
+        setCurrentStep("ready");
+      }
+      return next;
+    });
+    resetRecognitionResult();
+  }, [resetRecognitionResult]);
+
+  async function handleStartRecognition() {
+    if (selectedImages.length === 0) {
+      Alert.alert("未选择图片", "请先选择支付记录截图");
+      return;
+    }
+
+    resetRecognitionResult();
     setIsWorking(true);
 
     try {
-      setCurrentStep("ocr");
-      const ocr = await recognizePaymentScreenshot(result.assets[0].uri);
-      console.log("[x-ledger] OCR layout text", ocr.text);
-      console.log("[x-ledger] OCR raw text", ocr.rawText);
-      setOcrText(ocr.text);
-      setRawOcrText(ocr.rawText);
+      setCurrentStep("compress");
+      const compressed = await compressImagesForLlm(selectedImages.map((image) => image.uri));
       setCurrentStep("llm");
-      const debugResult = ocr.text ? await parseTransactionsFromOcrTextWithDebug(ocr.text) : null;
-      setLlmRequest(debugResult?.request ?? null);
-      setLlmResponse(debugResult?.responseContent ?? "");
-      const nextCandidates: ImportCandidate[] = (debugResult?.transactions ?? []).map((transaction) => ({
+      const parseResult = await parseTransactionsFromImagesWithDebug(compressed);
+      const nextCandidates: ImportCandidate[] = parseResult.transactions.map((transaction) => ({
         ...transaction,
         category_id: null,
       }));
@@ -144,12 +174,12 @@ export default function UploadScreen() {
       setCurrentStep("review");
 
       if (nextCandidates.length === 0) {
-        Alert.alert("没有可导入记录", "这张截图没有识别出有效支付记录");
+        Alert.alert("没有可导入记录", "这些截图没有识别出有效支付记录");
       }
     } catch (error) {
       console.error(error);
-      Alert.alert("识别失败", error instanceof Error ? error.message : "无法识别这张截图");
-      setCurrentStep("pick");
+      Alert.alert("识别失败", error instanceof Error ? error.message : "无法识别这些截图");
+      setCurrentStep("ready");
     } finally {
       setIsWorking(false);
     }
@@ -218,7 +248,7 @@ export default function UploadScreen() {
           <ThemedText type="title" style={styles.title}>
             导入
           </ThemedText>
-          <ThemedText style={styles.subtitle}>识别支付记录，筛选后再入库</ThemedText>
+          <ThemedText style={styles.subtitle}>选择支付记录截图，确认后再识别入库</ThemedText>
         </View>
         <Pressable disabled={isWorking} style={styles.backButton} onPress={handleSelectImage}>
           <ImagePlus size={20} color="#11181C" />
@@ -245,83 +275,52 @@ export default function UploadScreen() {
         })}
       </View>
 
-      {currentStep === "pick" ? (
-        <View style={styles.pickPanel}>
-          <Pressable disabled={isWorking} style={styles.selectButton} onPress={handleSelectImage}>
-            <ImagePlus size={20} color="#FFFFFF" />
-            <ThemedText style={styles.primaryButtonText}>选择支付记录截图</ThemedText>
-          </Pressable>
-        </View>
-      ) : null}
-
-      {isWorking && currentStep !== "review" ? (
-        <View style={styles.workingPanel}>
-          <ActivityIndicator color="#0A7EA4" />
-          <ThemedText style={styles.subtitle}>
-            {currentStep === "saving" ? "正在写入账本" : "正在识别，请稍候"}
-          </ThemedText>
-        </View>
-      ) : null}
-
-      {currentStep === "review" ? (
-        <>
-          <View style={styles.reviewHeader}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.imagePanel}>
+          <View style={styles.imagePanelHeader}>
             <ThemedText type="defaultSemiBold">
-              已选 {selectedCount} / {candidates.length} 条
+              {selectedImages.length > 0 ? `已选择 ${selectedImages.length} 张截图` : "支付记录截图"}
             </ThemedText>
-            <Pressable disabled={isWorking} style={styles.secondaryButton} onPress={handleSelectImage}>
-              <ThemedText style={styles.secondaryButtonText}>重新选择</ThemedText>
-            </Pressable>
+            {selectedImages.length > 0 ? (
+              <Pressable disabled={isWorking} style={styles.secondaryButton} onPress={handleSelectImage}>
+                <ThemedText style={styles.secondaryButtonText}>重新选择</ThemedText>
+              </Pressable>
+            ) : null}
           </View>
 
-          <Pressable style={styles.debugHeader} onPress={() => setDebugVisible((value) => !value)}>
-            <ThemedText type="defaultSemiBold" style={styles.debugTitle}>
-              调试信息
+          {selectedImages.length > 0 ? (
+            <SelectedImageGrid images={selectedImages} onRemove={removeSelectedImage} />
+          ) : (
+            <View style={styles.emptyImagePanel}>
+              <Pressable disabled={isWorking} style={styles.selectButton} onPress={handleSelectImage}>
+                <ImagePlus size={20} color="#FFFFFF" />
+                <ThemedText style={styles.primaryButtonText}>选择支付记录截图</ThemedText>
+              </Pressable>
+            </View>
+          )}
+        </View>
+
+        {isWorking && currentStep !== "review" ? (
+          <View style={styles.workingPanel}>
+            <ActivityIndicator color="#0A7EA4" />
+            <ThemedText style={styles.subtitle}>
+              {currentStep === "saving"
+                ? "正在写入账本"
+                : currentStep === "compress"
+                  ? "正在压缩图片"
+                  : "正在识别，请稍候"}
             </ThemedText>
-            {debugVisible ? (
-              <ChevronUp size={18} color="#687076" />
-            ) : (
-              <ChevronDown size={18} color="#687076" />
-            )}
-          </Pressable>
+          </View>
+        ) : null}
 
-          {debugVisible ? (
-            <ScrollView style={styles.debugPanel} contentContainerStyle={styles.debugContent}>
-              <ThemedText type="defaultSemiBold" style={styles.debugSectionTitle}>
-                OCR 重排文本
+        {currentStep === "review" ? (
+          <View style={styles.reviewContent}>
+            <View style={styles.reviewHeader}>
+              <ThemedText type="defaultSemiBold">
+                已选 {selectedCount} / {candidates.length} 条
               </ThemedText>
-              <ThemedText selectable style={styles.debugText}>
-                {ocrText || "(empty)"}
-              </ThemedText>
+            </View>
 
-              <ThemedText type="defaultSemiBold" style={styles.debugSectionTitle}>
-                OCR 原始全文
-              </ThemedText>
-              <ThemedText selectable style={styles.debugText}>
-                {rawOcrText || "(empty)"}
-              </ThemedText>
-
-              <ThemedText type="defaultSemiBold" style={styles.debugSectionTitle}>
-                发送 Prompt
-              </ThemedText>
-              <ThemedText selectable style={styles.debugText}>
-                {llmRequest
-                  ? llmRequest.messages
-                      .map((message) => `${message.role.toUpperCase()}\n${message.content}`)
-                      .join("\n\n---\n\n")
-                  : "(empty)"}
-              </ThemedText>
-
-              <ThemedText type="defaultSemiBold" style={styles.debugSectionTitle}>
-                LLM 响应
-              </ThemedText>
-              <ThemedText selectable style={styles.debugText}>
-                {llmResponse || "(empty)"}
-              </ThemedText>
-            </ScrollView>
-          ) : null}
-
-          <ScrollView contentContainerStyle={styles.listContent}>
             {groupedCandidates.map(([day, rows]) => (
               <View key={day} style={styles.dayGroup}>
                 <View style={styles.dayHeader}>
@@ -358,19 +357,54 @@ export default function UploadScreen() {
                 })}
               </View>
             ))}
-          </ScrollView>
+          </View>
+        ) : null}
+      </ScrollView>
 
+      {currentStep === "ready" ? (
+        <View style={styles.footer}>
+          <Pressable disabled={isWorking} style={styles.primaryButton} onPress={handleStartRecognition}>
+            <LoaderCircle size={20} color="#FFFFFF" />
+            <ThemedText style={styles.primaryButtonText}>开始识别</ThemedText>
+          </Pressable>
+        </View>
+      ) : null}
+
+      {currentStep === "review" ? (
           <View style={styles.footer}>
             <Pressable disabled={isWorking} style={styles.primaryButton} onPress={handleConfirmImport}>
               <Check size={20} color="#FFFFFF" />
               <ThemedText style={styles.primaryButtonText}>确定入库</ThemedText>
             </Pressable>
           </View>
-        </>
       ) : null}
     </SafeAreaView>
   );
 }
+
+const SelectedImageGrid = memo(function SelectedImageGrid({
+  images,
+  onRemove,
+}: {
+  images: SelectedImage[];
+  onRemove: (uri: string) => void;
+}) {
+  return (
+    <View style={styles.imageGrid}>
+      {images.map((image, index) => (
+        <View key={`${image.uri}-${index}`} style={styles.imageCard}>
+          <Image source={{ uri: image.uri }} style={styles.previewImage} resizeMode="contain" />
+          <Pressable
+            accessibilityLabel="移除图片"
+            style={styles.removeImageButton}
+            onPress={() => onRemove(image.uri)}>
+            <X size={16} color="#11181C" />
+          </Pressable>
+        </View>
+      ))}
+    </View>
+  );
+});
 
 const styles = StyleSheet.create({
   container: {
@@ -427,8 +461,52 @@ const styles = StyleSheet.create({
     color: "#0A7EA4",
     fontWeight: "700",
   },
-  pickPanel: {
+  content: {
+    paddingBottom: 76,
+  },
+  imagePanel: {
+    marginHorizontal: 12,
+    marginTop: 10,
+  },
+  imagePanelHeader: {
+    alignItems: "center",
+    flexDirection: "row",
+    justifyContent: "space-between",
+    minHeight: 44,
+  },
+  emptyImagePanel: {
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 180,
     padding: 12,
+  },
+  imageGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+  },
+  imageCard: {
+    height: 128,
+    overflow: "hidden",
+    position: "relative",
+    width: "31.8%",
+  },
+  previewImage: {
+    height: "100%",
+    width: "100%",
+  },
+  removeImageButton: {
+    alignItems: "center",
+    backgroundColor: "rgba(255, 255, 255, 0.92)",
+    borderColor: "#D8DDE3",
+    borderRadius: 14,
+    borderWidth: 1,
+    height: 28,
+    justifyContent: "center",
+    position: "absolute",
+    right: 6,
+    top: 6,
+    width: 28,
   },
   primaryButton: {
     alignItems: "center",
@@ -476,51 +554,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexDirection: "row",
     justifyContent: "space-between",
-    paddingHorizontal: 16,
-    paddingTop: 12,
+    paddingHorizontal: 4,
   },
-  debugHeader: {
-    alignItems: "center",
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E3E6EA",
-    borderRadius: 8,
-    borderWidth: 1,
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginHorizontal: 12,
-    marginTop: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  debugTitle: {
-    fontSize: 14,
-  },
-  debugPanel: {
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E3E6EA",
-    borderRadius: 8,
-    borderWidth: 1,
-    marginHorizontal: 12,
-    marginTop: 6,
-    maxHeight: 260,
-  },
-  debugContent: {
-    gap: 8,
-    padding: 10,
-  },
-  debugSectionTitle: {
-    fontSize: 13,
-  },
-  debugText: {
-    color: "#475569",
-    fontFamily: "monospace",
-    fontSize: 12,
-    lineHeight: 17,
-  },
-  listContent: {
+  reviewContent: {
     gap: 12,
     padding: 12,
-    paddingBottom: 76,
   },
   dayGroup: {
     gap: 6,

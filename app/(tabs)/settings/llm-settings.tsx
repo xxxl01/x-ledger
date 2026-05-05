@@ -4,6 +4,8 @@ import { useCallback, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -88,29 +90,24 @@ export default function LlmSettingsScreen() {
 
   return (
     <SafeAreaView style={styles.container} edges={["top", "bottom"]}>
-      <View style={styles.header}>
-        <Pressable style={styles.backButton} onPress={() => router.back()}>
-          <ChevronLeft size={22} color="#11181C" />
-        </Pressable>
-        <View>
-          <ThemedText type="title" style={styles.title}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        style={styles.keyboardAvoider}>
+        <View style={styles.header}>
+          <Pressable style={styles.backButton} onPress={() => router.back()}>
+            <ChevronLeft size={22} color="#11181C" />
+          </Pressable>
+          <ThemedText type="defaultSemiBold" style={styles.title}>
             LLM 配置
           </ThemedText>
-          <ThemedText style={styles.subtitle}>用于把 OCR 文本整理为交易记录</ThemedText>
         </View>
-      </View>
 
-      {loading ? (
-        <View style={styles.loading}>
-          <ActivityIndicator color="#0A7EA4" />
-        </View>
-      ) : (
-        <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-          <View style={styles.card}>
-            <ThemedText type="defaultSemiBold" style={styles.sectionTitle}>
-              平台
-            </ThemedText>
-
+        {loading ? (
+          <View style={styles.loading}>
+            <ActivityIndicator color="#0A7EA4" />
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
             <ThemedText style={styles.label}>Base URL</ThemedText>
             <TextInput
               value={baseUrl}
@@ -131,12 +128,6 @@ export default function LlmSettingsScreen() {
               secureTextEntry
               style={styles.input}
             />
-          </View>
-
-          <View style={styles.card}>
-            <ThemedText type="defaultSemiBold" style={styles.sectionTitle}>
-              模型
-            </ThemedText>
 
             <ThemedText style={styles.label}>Model</ThemedText>
             <TextInput
@@ -147,16 +138,16 @@ export default function LlmSettingsScreen() {
               autoCorrect={false}
               style={styles.input}
             />
-          </View>
 
-          <Pressable
-            disabled={saving}
-            style={[styles.primaryButton, saving ? styles.disabledButton : undefined]}
-            onPress={handleSave}>
-            <ThemedText style={styles.primaryButtonText}>{saving ? "保存中" : "保存配置"}</ThemedText>
-          </Pressable>
-        </ScrollView>
-      )}
+            <Pressable
+              disabled={saving}
+              style={[styles.primaryButton, saving ? styles.disabledButton : undefined]}
+              onPress={handleSave}>
+              <ThemedText style={styles.primaryButtonText}>{saving ? "保存中" : "保存配置"}</ThemedText>
+            </Pressable>
+          </ScrollView>
+        )}
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
@@ -165,6 +156,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F7F8FA",
+  },
+  keyboardAvoider: {
+    flex: 1,
   },
   header: {
     alignItems: "center",
@@ -176,21 +170,13 @@ const styles = StyleSheet.create({
   },
   backButton: {
     alignItems: "center",
-    borderColor: "#D8DDE3",
-    borderRadius: 8,
-    borderWidth: 1,
     height: 40,
     justifyContent: "center",
-    width: 40,
+    width: 20,
   },
   title: {
-    fontSize: 26,
-    lineHeight: 30,
-  },
-  subtitle: {
-    color: "#687076",
-    fontSize: 13,
-    marginTop: 3,
+    fontSize: 22,
+    lineHeight: 24,
   },
   loading: {
     alignItems: "center",
@@ -198,25 +184,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   content: {
-    gap: 12,
-    padding: 12,
+    paddingHorizontal: 16,
     paddingBottom: 28,
-  },
-  card: {
-    backgroundColor: "#FFFFFF",
-    borderColor: "#E3E6EA",
-    borderRadius: 8,
-    borderWidth: 1,
-    padding: 14,
-  },
-  sectionTitle: {
-    marginBottom: 8,
+    paddingTop: 4,
   },
   label: {
     color: "#687076",
     fontSize: 13,
-    marginBottom: 5,
-    marginTop: 10,
+    marginBottom: 6,
+    marginTop: 14,
   },
   input: {
     borderColor: "#D8DDE3",
@@ -232,6 +208,7 @@ const styles = StyleSheet.create({
     backgroundColor: "#11181C",
     borderRadius: 8,
     justifyContent: "center",
+    marginTop: 20,
     minHeight: 48,
   },
   primaryButtonText: {

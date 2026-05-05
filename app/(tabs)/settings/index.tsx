@@ -1,9 +1,7 @@
 import { useRouter } from "expo-router";
 import { Bot, ChevronRight, Settings } from "lucide-react-native";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-
-import { ThemedText } from "@/components/themed-text";
 
 type SettingsItem = {
   key: string;
@@ -28,9 +26,9 @@ export default function SettingsScreen() {
     <SafeAreaView style={styles.container} edges={["top"]}>
       <View style={styles.header}>
         <Settings size={24} color="#11181C" />
-        <ThemedText type="title" style={styles.title}>
+        <Text style={styles.title}>
           设置
-        </ThemedText>
+        </Text>
       </View>
 
       <View style={styles.list}>
@@ -43,8 +41,8 @@ export default function SettingsScreen() {
               <Bot size={20} color="#0A7EA4" />
             </View>
             <View style={styles.textWrap}>
-              <ThemedText type="defaultSemiBold">{item.title}</ThemedText>
-              <ThemedText style={styles.description}>{item.description}</ThemedText>
+              <Text style={styles.itemTitle}>{item.title}</Text>
+              <Text style={styles.description}>{item.description}</Text>
             </View>
             <ChevronRight size={20} color="#94A3B8" />
           </Pressable>
@@ -68,7 +66,9 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   title: {
-    fontSize: 28,
+    color: "#11181C",
+    fontSize: 20,
+    fontWeight: "700",
     lineHeight: 32,
   },
   list: {
@@ -81,9 +81,9 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderWidth: 1,
     flexDirection: "row",
+    height: 64,
     marginVertical: 6,
     paddingHorizontal: 14,
-    paddingVertical: 16,
   },
   leadingIcon: {
     alignItems: "center",
@@ -96,10 +96,18 @@ const styles = StyleSheet.create({
   },
   textWrap: {
     flex: 1,
+    gap: 1,
+    justifyContent: "center",
+  },
+  itemTitle: {
+    color: "#11181C",
+    fontSize: 15,
+    fontWeight: "600",
+    lineHeight: 19,
   },
   description: {
     color: "#687076",
-    fontSize: 13,
-    marginTop: 4,
+    fontSize: 10,
+    lineHeight: 17,
   },
 });

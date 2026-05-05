@@ -1,5 +1,5 @@
-import { parseTransactionsFromOcrText } from "./llm";
-import { recognizePaymentScreenshot } from "./ocr";
+import { compressImagesForLlm } from "./images";
+import { parseTransactionsFromImages } from "./llm";
 import { createTransactions, type CreateTransactionInput } from "./transactions";
 
 export type ImportCandidate = CreateTransactionInput;
@@ -10,17 +10,17 @@ export type ScreenshotImportResult = {
   selected: number;
 };
 
-export async function analyzePaymentScreenshot(imageUri: string): Promise<ImportCandidate[]> {
-  const ocr = await recognizePaymentScreenshot(imageUri);
-  if (!ocr.text) {
-    return [];
-  }
-
-  const parsed = await parseTransactionsFromOcrText(ocr.text);
+export async function analyzePaymentScreenshots(imageUris: string[]): Promise<ImportCandidate[]> {
+  const images = await compressImagesForLlm(imageUris);
+  const parsed = await parseTransactionsFromImages(images);
   return parsed.map((transaction) => ({
     ...transaction,
     category_id: null,
   }));
+}
+
+export async function analyzePaymentScreenshot(imageUri: string): Promise<ImportCandidate[]> {
+  return analyzePaymentScreenshots([imageUri]);
 }
 
 export async function saveImportCandidates(
@@ -38,7 +38,7 @@ export async function saveImportCandidates(
 export async function importPaymentScreenshot(
   imageUri: string,
 ): Promise<ScreenshotImportResult> {
-  const candidates = await analyzePaymentScreenshot(imageUri);
+  const candidates = await analyzePaymentScreenshots([imageUri]);
   if (candidates.length === 0) {
     return {
       imported: 0,

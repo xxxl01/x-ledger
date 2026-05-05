@@ -1,4 +1,5 @@
 import { getConfigValue } from "./configs";
+import type { CompressedImportImage } from "./images";
 import { TransactionType, type TransactionTypeValue } from "./transactions";
 
 export type ParsedTransaction = {
@@ -17,26 +18,41 @@ type LlmTransactionPayload = {
   }[];
 };
 
-type ChatCompletionResponse = {
-  choices?: {
-    message?: {
-      content?: string;
-    };
+type ResponseApiResponse = {
+  output_text?: string;
+  output?: {
+    content?: {
+      text?: string;
+      type?: string;
+    }[];
   }[];
+};
+
+export type LlmInputText = {
+  type: "input_text";
+  text: string;
+};
+
+export type LlmInputImage = {
+  type: "input_image";
+  image_url: string;
+  detail: "auto" | "low" | "high";
+};
+
+export type LlmInputMessage = {
+  role: "system" | "user";
+  content: (LlmInputText | LlmInputImage)[];
 };
 
 const DEFAULT_LLM_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_LLM_MODEL = "gpt-4.1-mini";
 const SYSTEM_PROMPT =
-  "你从支付记录列表截图的 OCR 文本中提取交易。OCR 文本已按屏幕坐标重排：每一行对应截图中的一条水平文本行，竖线 | 表示同一水平行中的左右列。相邻的商户/说明、日期时间、金额可能属于同一条交易，需要按列表顺序合并。只输出 JSON，不要解释。不要输出分类。金额始终输出正数，收支方向用 0 表示支出、1 表示收入。不确定或缺关键字段的记录不要输出。";
+  "你从支付记录列表截图中提取交易。直接阅读图片内容，按列表顺序识别商户/说明、日期时间和金额。只输出 JSON，不要解释。不要输出分类。金额始终输出正数，收支方向用 0 表示支出、1 表示收入。不确定或缺关键字段的记录不要输出。多张图片可能包含连续记录，也可能有重复记录，重复记录只输出一次。";
 
 export type LlmDebugRequest = {
   apiUrl: string;
   model: string;
-  messages: {
-    role: "system" | "user";
-    content: string;
-  }[];
+  input?: LlmInputMessage[];
   body: unknown;
 };
 
@@ -71,7 +87,7 @@ async function getLlmSettings() {
 
   return {
     apiKey,
-    apiUrl: apiUrl ?? `${baseUrl.replace(/\/+$/, "")}/chat/completions`,
+    apiUrl: apiUrl ?? `${baseUrl.replace(/\/+$/, "")}/responses`,
     model,
   };
 }
@@ -154,36 +170,84 @@ function normalizePayload(payload: LlmTransactionPayload): ParsedTransaction[] {
   return transactions;
 }
 
-export function buildTransactionParseMessages(ocrText: string): LlmDebugRequest["messages"] {
+function buildImageTransactionInput(images: CompressedImportImage[]): LlmInputMessage[] {
   return [
     {
       role: "system",
-      content: SYSTEM_PROMPT,
+      content: [{ type: "input_text", text: SYSTEM_PROMPT }],
     },
     {
       role: "user",
-      content: `输出格式：{"transactions":[{"occurred_at":"ISO 8601 时间","transaction_type":0,"amount":"28.50","description":"交易摘要或 null"}]}\n\nOCR 文本：\n${ocrText}`,
+      content: [
+        {
+          type: "input_text",
+          text:
+            "输出 JSON 格式：{\"transactions\":[{\"occurred_at\":\"ISO 8601 时间\",\"transaction_type\":0,\"amount\":\"28.50\",\"description\":\"交易摘要或 null\"}]}\n\n请从下面的支付记录截图中提取所有有效交易。",
+        },
+        ...images.map((image): LlmInputImage => ({
+          type: "input_image",
+          image_url: image.dataUrl,
+          detail: "auto",
+        })),
+      ],
     },
   ];
 }
 
-export async function parseTransactionsFromOcrTextWithDebug(
-  ocrText: string,
+function redactImageInput(input: LlmInputMessage[]): LlmInputMessage[] {
+  return input.map((message) => ({
+    ...message,
+    content: message.content.map((item) => {
+      if (item.type !== "input_image") {
+        return item;
+      }
+
+      return {
+        ...item,
+        image_url: item.image_url.replace(/base64,.+$/s, "base64,[redacted]"),
+      };
+    }),
+  }));
+}
+
+function getResponseText(data: ResponseApiResponse): string | undefined {
+  if (typeof data.output_text === "string" && data.output_text.length > 0) {
+    return data.output_text;
+  }
+
+  return data.output
+    ?.flatMap((item) => item.content ?? [])
+    .map((content) => content.text)
+    .find((text): text is string => typeof text === "string" && text.length > 0);
+}
+
+export async function parseTransactionsFromImagesWithDebug(
+  images: CompressedImportImage[],
 ): Promise<LlmParseDebugResult> {
+  if (images.length === 0) {
+    throw new Error("No images selected for LLM parsing.");
+  }
+
   const { apiKey, apiUrl, model } = await getLlmSettings();
-  const messages = buildTransactionParseMessages(ocrText);
+  const input = buildImageTransactionInput(images);
   const body = {
     model,
-    temperature: 0,
-    response_format: { type: "json_object" },
-    messages,
+    input,
+    text: {
+      format: { type: "json_object" },
+    },
+  };
+  const debugInput = redactImageInput(input);
+  const debugBody = {
+    ...body,
+    input: debugInput,
   };
 
-  console.log("[x-ledger] LLM transaction parse request", {
+  console.log("[x-ledger] LLM image transaction parse request", {
     apiUrl,
     model,
-    messages,
-    body,
+    input: debugInput,
+    body: debugBody,
   });
 
   const response = await fetch(apiUrl, {
@@ -200,27 +264,29 @@ export async function parseTransactionsFromOcrTextWithDebug(
     throw new Error(`LLM request failed: ${response.status} ${message}`);
   }
 
-  const data = (await response.json()) as ChatCompletionResponse;
-  const content = data.choices?.[0]?.message?.content;
+  const data = (await response.json()) as ResponseApiResponse;
+  const content = getResponseText(data);
   if (!content) {
     throw new Error("LLM returned an empty response.");
   }
 
-  console.log("[x-ledger] LLM transaction parse response", content);
+  console.log("[x-ledger] LLM image transaction parse response", content);
 
   return {
     transactions: normalizePayload(extractJsonObject(content)),
     request: {
       apiUrl,
       model,
-      messages,
-      body,
+      input: debugInput,
+      body: debugBody,
     },
     responseContent: content,
   };
 }
 
-export async function parseTransactionsFromOcrText(ocrText: string): Promise<ParsedTransaction[]> {
-  const result = await parseTransactionsFromOcrTextWithDebug(ocrText);
+export async function parseTransactionsFromImages(
+  images: CompressedImportImage[],
+): Promise<ParsedTransaction[]> {
+  const result = await parseTransactionsFromImagesWithDebug(images);
   return result.transactions;
 }
