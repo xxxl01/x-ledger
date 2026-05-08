@@ -92,6 +92,10 @@ export default function HomeScreen() {
   const [editForm, setEditForm] = useState<EditForm | null>(null);
   const [isCreatingEditCategory, setIsCreatingEditCategory] = useState(false);
   const [editCategoryName, setEditCategoryName] = useState("");
+  const [categoryPickerWidth, setCategoryPickerWidth] = useState(0);
+  const categoryChipWidth = categoryPickerWidth > 0
+    ? Math.floor((categoryPickerWidth - 12) / 3)
+    : undefined;
 
   const loadData = useCallback(async () => {
     const [nextTransactions, nextCategories] = await Promise.all([
@@ -449,45 +453,48 @@ export default function HomeScreen() {
                       </Pressable>
                     </View>
                   ) : (
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      style={styles.categoryScroller}
-                      contentContainerStyle={styles.categoryScrollerContent}>
-                      <View style={styles.categoryPickerRow}>
+                    <View
+                      style={styles.categoryPickerRow}
+                      onLayout={(event) => setCategoryPickerWidth(event.nativeEvent.layout.width)}>
+                      <Pressable
+                        onPress={() => setEditForm({ ...editForm, category_id: "" })}
+                        style={[
+                          styles.categoryChip,
+                          categoryChipWidth ? { width: categoryChipWidth } : styles.categoryChipFallback,
+                          editForm.category_id === "" ? styles.activeCategoryChip : undefined,
+                        ]}>
+                        <ThemedText style={styles.categoryChipText} numberOfLines={1}>未分类</ThemedText>
+                      </Pressable>
+                      {categories.map((category) => (
                         <Pressable
-                          onPress={() => setEditForm({ ...editForm, category_id: "" })}
+                          key={category.category_id}
+                          onPress={() =>
+                            setEditForm({
+                              ...editForm,
+                              category_id: String(category.category_id),
+                            })
+                          }
                           style={[
                             styles.categoryChip,
-                            editForm.category_id === "" ? styles.activeCategoryChip : undefined,
+                            categoryChipWidth ? { width: categoryChipWidth } : styles.categoryChipFallback,
+                            editForm.category_id === String(category.category_id)
+                              ? styles.activeCategoryChip
+                              : undefined,
                           ]}>
-                          <ThemedText style={styles.categoryChipText}>未分类</ThemedText>
+                          <ThemedText style={styles.categoryChipText} numberOfLines={1}>
+                            {category.category_name}
+                          </ThemedText>
                         </Pressable>
-                        {categories.map((category) => (
-                          <Pressable
-                            key={category.category_id}
-                            onPress={() =>
-                              setEditForm({
-                                ...editForm,
-                                category_id: String(category.category_id),
-                              })
-                            }
-                            style={[
-                              styles.categoryChip,
-                              editForm.category_id === String(category.category_id)
-                                ? styles.activeCategoryChip
-                                : undefined,
-                            ]}>
-                            <ThemedText style={styles.categoryChipText}>{category.category_name}</ThemedText>
-                          </Pressable>
-                        ))}
-                        <Pressable
-                          onPress={() => setIsCreatingEditCategory(true)}
-                          style={styles.categoryChip}>
-                          <ThemedText style={styles.categoryChipText}>+ 分类</ThemedText>
-                        </Pressable>
-                      </View>
-                    </ScrollView>
+                      ))}
+                      <Pressable
+                        onPress={() => setIsCreatingEditCategory(true)}
+                        style={[
+                          styles.categoryChip,
+                          categoryChipWidth ? { width: categoryChipWidth } : styles.categoryChipFallback,
+                        ]}>
+                        <ThemedText style={styles.categoryChipText} numberOfLines={1}>+ 分类</ThemedText>
+                      </Pressable>
+                    </View>
                   )}
 
                   <View style={styles.modalActionRow}>
@@ -698,10 +705,12 @@ const styles = StyleSheet.create({
     width: "100%",
   },
   modalPanel: {
+    alignSelf: "center",
     backgroundColor: "#FFFFFF",
     borderColor: "#D8DDE3",
     borderRadius: 8,
     borderWidth: 1,
+    maxWidth: 420,
     padding: 12,
     width: "100%",
   },
@@ -756,15 +765,10 @@ const styles = StyleSheet.create({
     borderColor: "#0A7EA4",
   },
   categoryPickerRow: {
+    alignSelf: "stretch",
     flexDirection: "row",
+    flexWrap: "wrap",
     gap: 6,
-  },
-  categoryScroller: {
-    flexGrow: 0,
-    height: 30,
-  },
-  categoryScrollerContent: {
-    alignItems: "center",
   },
   categoryCreateInlineRow: {
     alignItems: "center",
@@ -781,11 +785,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
   },
   categoryChip: {
+    alignItems: "center",
     borderColor: "#D8DDE3",
     borderRadius: 8,
     borderWidth: 1,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
+    height: 30,
+    justifyContent: "center",
+    paddingHorizontal: 6,
+  },
+  categoryChipFallback: {
+    width: "31%",
   },
   categoryChipText: {
     fontSize: 13,

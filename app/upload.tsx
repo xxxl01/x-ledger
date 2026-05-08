@@ -7,6 +7,8 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  TextInput,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -25,9 +27,10 @@ import { memo, useCallback, useMemo, useState } from "react";
 import { ThemedText } from "@/components/themed-text";
 import {
   compressImagesForLlm,
+  markImportCandidateDuplicates,
   parseTransactionsFromImagesWithDebug,
   saveImportCandidates,
-  type ImportCandidate,
+  type ImportCandidateWithDuplicateFlag,
 } from "@/service";
 
 type StepKey = "pick" | "ready" | "compress" | "llm" | "review" | "saving";
@@ -58,7 +61,7 @@ function formatTime(iso: string) {
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
 }
 
-function formatMoney(transaction: ImportCandidate) {
+function formatMoney(transaction: ImportCandidateWithDuplicateFlag) {
   const prefix = transaction.transaction_type === 1 ? "+" : "-";
   return `${prefix}¥${Number(transaction.amount).toFixed(2)}`;
 }
@@ -84,12 +87,13 @@ export default function UploadScreen() {
   const router = useRouter();
   const [currentStep, setCurrentStep] = useState<StepKey>("pick");
   const [isWorking, setIsWorking] = useState(false);
+  const [transactionYear, setTransactionYear] = useState(() => String(new Date().getFullYear()));
   const [selectedImages, setSelectedImages] = useState<SelectedImage[]>([]);
-  const [candidates, setCandidates] = useState<ImportCandidate[]>([]);
+  const [candidates, setCandidates] = useState<ImportCandidateWithDuplicateFlag[]>([]);
   const [selectedIndexes, setSelectedIndexes] = useState<Set<number>>(new Set());
 
   const groupedCandidates = useMemo(() => {
-    const groups = new Map<string, { index: number; candidate: ImportCandidate }[]>();
+    const groups = new Map<string, { index: number; candidate: ImportCandidateWithDuplicateFlag }[]>();
 
     candidates.forEach((candidate, index) => {
       const day = formatDay(candidate.occurred_at);
@@ -102,6 +106,14 @@ export default function UploadScreen() {
   }, [candidates]);
 
   const selectedCount = selectedIndexes.size;
+  const duplicateCount = useMemo(
+    () => candidates.filter((candidate) => candidate.isDuplicate).length,
+    [candidates],
+  );
+  const selectedDuplicateCount = useMemo(
+    () => candidates.filter((candidate, index) => candidate.isDuplicate && selectedIndexes.has(index)).length,
+    [candidates, selectedIndexes],
+  );
 
   const resetRecognitionResult = useCallback(() => {
     setCandidates([]);
@@ -152,6 +164,12 @@ export default function UploadScreen() {
   }, [resetRecognitionResult]);
 
   async function handleStartRecognition() {
+    const recognitionYear = transactionYear.trim();
+    if (!/^\d{4}$/.test(recognitionYear)) {
+      Alert.alert("年份无效", "请输入 4 位年份");
+      return;
+    }
+
     if (selectedImages.length === 0) {
       Alert.alert("未选择图片", "请先选择支付记录截图");
       return;
@@ -164,11 +182,14 @@ export default function UploadScreen() {
       setCurrentStep("compress");
       const compressed = await compressImagesForLlm(selectedImages.map((image) => image.uri));
       setCurrentStep("llm");
-      const parseResult = await parseTransactionsFromImagesWithDebug(compressed);
-      const nextCandidates: ImportCandidate[] = parseResult.transactions.map((transaction) => ({
+      const parseResult = await parseTransactionsFromImagesWithDebug(compressed, {
+        transactionYear: recognitionYear,
+      });
+      const parsedCandidates = parseResult.transactions.map((transaction) => ({
         ...transaction,
         category_id: null,
       }));
+      const nextCandidates = await markImportCandidateDuplicates(parsedCandidates);
       setCandidates(nextCandidates);
       setSelectedIndexes(new Set(nextCandidates.map((_, index) => index)));
       setCurrentStep("review");
@@ -226,7 +247,7 @@ export default function UploadScreen() {
 
     try {
       const result = await saveImportCandidates(selected);
-      Alert.alert("导入完成", `已导入 ${result.imported} 条，跳过 ${result.duplicates} 条重复`, [
+      Alert.alert("导入完成", `已导入 ${result.imported} / ${result.selected} 条`, [
         { text: "回到账本", onPress: () => router.back() },
       ]);
     } catch (error) {
@@ -278,14 +299,25 @@ export default function UploadScreen() {
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.imagePanel}>
           <View style={styles.imagePanelHeader}>
-            <ThemedText type="defaultSemiBold">
+            <ThemedText type="defaultSemiBold" style={styles.imagePanelTitle}>
               {selectedImages.length > 0 ? `已选择 ${selectedImages.length} 张截图` : "支付记录截图"}
             </ThemedText>
-            {selectedImages.length > 0 ? (
-              <Pressable disabled={isWorking} style={styles.secondaryButton} onPress={handleSelectImage}>
-                <ThemedText style={styles.secondaryButtonText}>重新选择</ThemedText>
-              </Pressable>
-            ) : null}
+            <View style={styles.imageHeaderActions}>
+              <TextInput
+                value={transactionYear}
+                onChangeText={setTransactionYear}
+                editable={!isWorking}
+                keyboardType="number-pad"
+                maxLength={4}
+                placeholder="年份"
+                style={styles.yearInput}
+              />
+              {selectedImages.length > 0 ? (
+                <Pressable disabled={isWorking} style={styles.secondaryButton} onPress={handleSelectImage}>
+                  <ThemedText style={styles.secondaryButtonText}>重新选择</ThemedText>
+                </Pressable>
+              ) : null}
+            </View>
           </View>
 
           {selectedImages.length > 0 ? (
@@ -319,6 +351,11 @@ export default function UploadScreen() {
               <ThemedText type="defaultSemiBold">
                 已选 {selectedCount} / {candidates.length} 条
               </ThemedText>
+              {duplicateCount > 0 ? (
+                <ThemedText style={styles.duplicateSummary}>
+                  重复 {selectedDuplicateCount} / {duplicateCount} 条
+                </ThemedText>
+              ) : null}
             </View>
 
             {groupedCandidates.map(([day, rows]) => (
@@ -333,23 +370,35 @@ export default function UploadScreen() {
                 </View>
                 {rows.map(({ index, candidate }) => {
                   const selected = selectedIndexes.has(index);
+                  const textStyle = candidate.isDuplicate ? styles.duplicateText : undefined;
                   return (
                     <Pressable
                       key={`${candidate.occurred_at}-${candidate.amount}-${index}`}
                       onPress={() => toggleCandidate(index)}
-                      style={[styles.recordRow, selected ? styles.selectedRecordRow : undefined]}>
+                      style={[
+                        styles.recordRow,
+                        selected ? styles.selectedRecordRow : undefined,
+                        candidate.isDuplicate ? styles.duplicateRecordRow : undefined,
+                      ]}>
                       {selected ? (
-                        <SquareCheckBig size={20} color="#0A7EA4" />
+                        <SquareCheckBig size={20} color={candidate.isDuplicate ? "#C2410C" : "#0A7EA4"} />
                       ) : (
-                        <Square size={20} color="#94A3B8" />
+                        <Square size={20} color={candidate.isDuplicate ? "#C2410C" : "#94A3B8"} />
                       )}
                       <View style={styles.recordMain}>
-                        <ThemedText type="defaultSemiBold" numberOfLines={1}>
+                        <ThemedText type="defaultSemiBold" numberOfLines={1} style={textStyle}>
                           {candidate.description || "未命名记录"}
                         </ThemedText>
-                        <ThemedText style={styles.mutedText}>{formatTime(candidate.occurred_at)}</ThemedText>
+                        <ThemedText style={[styles.mutedText, textStyle]}>
+                          {formatTime(candidate.occurred_at)}
+                          {candidate.isDuplicate ? " · 重复" : ""}
+                        </ThemedText>
                       </View>
-                      <ThemedText style={candidate.transaction_type === 1 ? styles.incomeText : styles.expenseText}>
+                      <ThemedText
+                        style={[
+                          candidate.transaction_type === 1 ? styles.incomeText : styles.expenseText,
+                          textStyle,
+                        ]}>
                         {formatMoney(candidate)}
                       </ThemedText>
                     </Pressable>
@@ -389,10 +438,13 @@ const SelectedImageGrid = memo(function SelectedImageGrid({
   images: SelectedImage[];
   onRemove: (uri: string) => void;
 }) {
+  const { width } = useWindowDimensions();
+  const imageSize = Math.floor((width - 24 - 16) / 3);
+
   return (
     <View style={styles.imageGrid}>
       {images.map((image, index) => (
-        <View key={`${image.uri}-${index}`} style={styles.imageCard}>
+        <View key={`${image.uri}-${index}`} style={[styles.imageCard, { height: imageSize, width: imageSize }]}>
           <Image source={{ uri: image.uri }} style={styles.previewImage} resizeMode="contain" />
           <Pressable
             accessibilityLabel="移除图片"
@@ -471,8 +523,30 @@ const styles = StyleSheet.create({
   imagePanelHeader: {
     alignItems: "center",
     flexDirection: "row",
+    gap: 8,
     justifyContent: "space-between",
     minHeight: 44,
+  },
+  imagePanelTitle: {
+    flex: 1,
+  },
+  imageHeaderActions: {
+    alignItems: "center",
+    flexDirection: "row",
+    gap: 6,
+  },
+  yearInput: {
+    borderColor: "#D8DDE3",
+    borderRadius: 8,
+    borderWidth: 1,
+    color: "#11181C",
+    fontSize: 13,
+    fontWeight: "700",
+    height: 34,
+    paddingHorizontal: 8,
+    paddingVertical: 0,
+    textAlign: "center",
+    width: 58,
   },
   emptyImagePanel: {
     alignItems: "center",
@@ -486,10 +560,8 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   imageCard: {
-    height: 128,
     overflow: "hidden",
     position: "relative",
-    width: "31.8%",
   },
   previewImage: {
     height: "100%",
@@ -556,6 +628,11 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 4,
   },
+  duplicateSummary: {
+    color: "#C2410C",
+    fontSize: 13,
+    fontWeight: "700",
+  },
   reviewContent: {
     gap: 12,
     padding: 12,
@@ -599,9 +676,15 @@ const styles = StyleSheet.create({
   selectedRecordRow: {
     borderColor: "#0A7EA4",
   },
+  duplicateRecordRow: {
+    borderColor: "#F97316",
+  },
   recordMain: {
     flex: 1,
     gap: 1,
+  },
+  duplicateText: {
+    color: "#C2410C",
   },
   mutedText: {
     color: "#687076",

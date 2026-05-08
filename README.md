@@ -1,6 +1,30 @@
-# X Ledger
+<p align="center">
+  <img src="assets/images/icon.png" alt="X Ledger Logo" width="120" />
+</p>
 
-X Ledger 是一个基于 Expo 和 React Native 的本地优先记账应用。它面向个人日常收支管理，支持按月查看流水、维护资产账户、管理分类，并通过可配置的 LLM 接口从支付记录截图中提取交易候选项，确认后写入本地账本。
+<h1 align="center">X Ledger</h1>
+
+<p align="center">
+  <strong>一个基于 Expo 和 React Native 的本地优先记账应用</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Expo-54-blue" alt="Expo 54" />
+  <img src="https://img.shields.io/badge/React%20Native-0.81-61DAFB" alt="React Native 0.81" />
+  <img src="https://img.shields.io/badge/TypeScript-5.3-3178C6" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/License-None-lightgrey" alt="License" />
+</p>
+
+<p align="center">
+  <a href="#features">功能特性</a> ·
+  <a href="#tech-stack">技术栈</a> ·
+  <a href="#getting-started">快速开始</a> ·
+  <a href="#contributing">参与贡献</a>
+</p>
+
+---
+
+X Ledger 面向个人日常收支管理，支持按月查看流水、维护资产账户、管理分类，并通过可配置的 LLM 接口从支付记录截图中提取交易候选项，确认后写入本地账本。
 
 > 项目仍在早期迭代中，核心记账、资产、分类和截图导入流程已经具备可运行基础。
 
@@ -74,19 +98,23 @@ npm run lint
 
 ## LLM Configuration
 
-Screenshot import requires an OpenAI-compatible Responses API endpoint. You can configure it in the app from Settings -> LLM 配置.
+Screenshot import requires an OpenAI-compatible Responses API endpoint. You can configure it in the app from **Settings → LLM 配置**.
 
-Default values:
+**Default values:**
 
-- Base URL: `https://api.openai.com/v1`
-- Model: `gpt-4.1-mini`
+| 配置项 | 默认值 |
+|--------|--------|
+| Base URL | `https://api.openai.com/v1` |
+| Model | `gpt-4.1-mini` |
 
-The service also reads these environment variables when app-level config is not present:
+**环境变量**（当应用内配置未设置时生效）：
 
-- `EXPO_PUBLIC_LLM_API_KEY`
-- `EXPO_PUBLIC_LLM_BASE_URL`
-- `EXPO_PUBLIC_LLM_API_URL`
-- `EXPO_PUBLIC_LLM_MODEL`
+| 变量名 | 说明 |
+|--------|------|
+| `EXPO_PUBLIC_LLM_API_KEY` | API 密钥 |
+| `EXPO_PUBLIC_LLM_BASE_URL` | 基础 URL |
+| `EXPO_PUBLIC_LLM_API_URL` | API URL |
+| `EXPO_PUBLIC_LLM_MODEL` | 模型名称 |
 
 ## Project Structure
 
@@ -104,10 +132,12 @@ assets/              App icons and image assets
 
 The local database currently contains:
 
-- `transactions`: income and expense records, with `transaction_type` using `0` for expense and `1` for income.
-- `assets`: asset accounts and balances.
-- `categories`: transaction categories.
-- `configs`: local key-value configuration, including LLM settings.
+| 表名 | 说明 |
+|------|------|
+| `transactions` | 收支记录，`transaction_type` 用 `0` 表示支出，`1` 表示收入 |
+| `assets` | 资产账户及余额 |
+| `categories` | 交易分类 |
+| `configs` | 本地键值配置，包括 LLM 设置 |
 
 Database schema changes are tracked through Drizzle migrations under `db/drizzle`.
 
@@ -120,10 +150,10 @@ Database schema changes are tracked through Drizzle migrations under `db/drizzle
 
 ## Roadmap
 
-- Improve transaction editing and manual entry workflows.
-- Add richer monthly and category analytics.
-- Add tests around import parsing, deduplication, and data services.
-- Polish release configuration and documentation before public distribution.
+- [ ] Improve transaction editing and manual entry workflows.
+- [ ] Add richer monthly and category analytics.
+- [ ] Add tests around import parsing, deduplication, and data services.
+- [ ] Polish release configuration and documentation before public distribution.
 
 ## Contributing
 

@@ -1,6 +1,6 @@
 import { db } from "@/db/client";
 import { transactions, type NewTransaction, type Transaction } from "@/db/schema";
-import { and, desc, eq, gte, lt } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, lt } from "drizzle-orm";
 
 export const TransactionType = {
   Expense: 0,
@@ -17,27 +17,54 @@ export function createTransactionDedupeKey(data: CreateTransactionInput) {
 
 export async function createTransaction(
   data: CreateTransactionInput,
+  options?: { allowDuplicate?: boolean; duplicateKeySuffix?: string },
 ): Promise<Transaction | undefined> {
-  const result = await db
+  const dedupeKey = createTransactionDedupeKey(data);
+  const values = {
+    ...data,
+    dedupe_key: options?.allowDuplicate
+      ? `${dedupeKey}_manual_${options.duplicateKeySuffix ?? Date.now()}`
+      : dedupeKey,
+  };
+
+  const insert = db
     .insert(transactions)
-    .values({
-      ...data,
-      dedupe_key: createTransactionDedupeKey(data),
-    })
-    .onConflictDoNothing({ target: transactions.dedupe_key })
-    .returning();
+    .values(values);
+
+  const result = options?.allowDuplicate
+    ? await insert.returning()
+    : await insert.onConflictDoNothing({ target: transactions.dedupe_key }).returning();
 
   return result[0];
 }
 
-export async function createTransactions(data: CreateTransactionInput[]): Promise<{
+export async function createSelectedTransactionsAllowingDuplicates(
+  data: (CreateTransactionInput & { isDuplicate?: boolean })[],
+): Promise<{
   created: Transaction[];
-  duplicates: number;
 }> {
   const created: Transaction[] = [];
 
-  for (const item of data) {
-    const transaction = await createTransaction(item);
+  for (const [index, item] of data.entries()) {
+    const transactionData: CreateTransactionInput = {
+      transaction_type: item.transaction_type,
+      amount: item.amount,
+      occurred_at: item.occurred_at,
+      description: item.description,
+      category_id: item.category_id,
+    };
+    const duplicateKeySuffix = `${Date.now()}_${index}`;
+    let transaction = await createTransaction(transactionData, {
+      allowDuplicate: item.isDuplicate,
+      duplicateKeySuffix,
+    });
+    if (!transaction) {
+      transaction = await createTransaction(transactionData, {
+        allowDuplicate: true,
+        duplicateKeySuffix,
+      });
+    }
+
     if (transaction) {
       created.push(transaction);
     }
@@ -45,8 +72,23 @@ export async function createTransactions(data: CreateTransactionInput[]): Promis
 
   return {
     created,
-    duplicates: data.length - created.length,
   };
+}
+
+export async function getExistingTransactionDedupeKeys(
+  data: CreateTransactionInput[],
+): Promise<Set<string>> {
+  const keys = Array.from(new Set(data.map(createTransactionDedupeKey)));
+  if (keys.length === 0) {
+    return new Set();
+  }
+
+  const result = await db
+    .select({ dedupe_key: transactions.dedupe_key })
+    .from(transactions)
+    .where(inArray(transactions.dedupe_key, keys));
+
+  return new Set(result.map((item) => item.dedupe_key));
 }
 
 export async function getTransactionById(

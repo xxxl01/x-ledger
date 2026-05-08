@@ -62,6 +62,10 @@ export type LlmParseDebugResult = {
   responseContent: string;
 };
 
+export type ParseTransactionsFromImagesOptions = {
+  transactionYear?: string;
+};
+
 function getEnvValue(key: string): string | undefined {
   const value = process.env[key];
   return value && value.trim().length > 0 ? value.trim() : undefined;
@@ -170,7 +174,14 @@ function normalizePayload(payload: LlmTransactionPayload): ParsedTransaction[] {
   return transactions;
 }
 
-function buildImageTransactionInput(images: CompressedImportImage[]): LlmInputMessage[] {
+function buildImageTransactionInput(
+  images: CompressedImportImage[],
+  options?: ParseTransactionsFromImagesOptions,
+): LlmInputMessage[] {
+  const yearInstruction = options?.transactionYear
+    ? `所有交易的 occurred_at 年份必须使用 ${options.transactionYear} 年；截图中只有月日或时间时，也必须补全为 ${options.transactionYear} 年。`
+    : "";
+
   return [
     {
       role: "system",
@@ -182,7 +193,7 @@ function buildImageTransactionInput(images: CompressedImportImage[]): LlmInputMe
         {
           type: "input_text",
           text:
-            "输出 JSON 格式：{\"transactions\":[{\"occurred_at\":\"ISO 8601 时间\",\"transaction_type\":0,\"amount\":\"28.50\",\"description\":\"交易摘要或 null\"}]}\n\n请从下面的支付记录截图中提取所有有效交易。",
+            `输出 JSON 格式：{"transactions":[{"occurred_at":"ISO 8601 时间","transaction_type":0,"amount":"28.50","description":"交易摘要或 null"}]}\n${yearInstruction}\n请从下面的支付记录截图中提取所有有效交易。`,
         },
         ...images.map((image): LlmInputImage => ({
           type: "input_image",
@@ -223,13 +234,14 @@ function getResponseText(data: ResponseApiResponse): string | undefined {
 
 export async function parseTransactionsFromImagesWithDebug(
   images: CompressedImportImage[],
+  options?: ParseTransactionsFromImagesOptions,
 ): Promise<LlmParseDebugResult> {
   if (images.length === 0) {
     throw new Error("No images selected for LLM parsing.");
   }
 
   const { apiKey, apiUrl, model } = await getLlmSettings();
-  const input = buildImageTransactionInput(images);
+  const input = buildImageTransactionInput(images, options);
   const body = {
     model,
     input,
@@ -286,7 +298,8 @@ export async function parseTransactionsFromImagesWithDebug(
 
 export async function parseTransactionsFromImages(
   images: CompressedImportImage[],
+  options?: ParseTransactionsFromImagesOptions,
 ): Promise<ParsedTransaction[]> {
-  const result = await parseTransactionsFromImagesWithDebug(images);
+  const result = await parseTransactionsFromImagesWithDebug(images, options);
   return result.transactions;
 }
